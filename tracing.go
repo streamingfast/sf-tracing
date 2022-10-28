@@ -52,7 +52,19 @@ func init() {
 func GetTraceID(ctx context.Context) (out ttrace.TraceID) {
 	span := ttrace.SpanFromContext(ctx)
 	if span == nil {
-		return config.Load().(*defaultIDGenerator).NewTraceID()
+		return NewRandomTraceID()
+	}
+
+	out = span.SpanContext().TraceID()
+	return
+}
+
+// GetTraceIDOrZeroed is just like `GetTraceID` but returns a zeroed
+// trace ID if no trace ID is found in the context.
+func GetTraceIDOrZeroed(ctx context.Context) (out ttrace.TraceID) {
+	span := ttrace.SpanFromContext(ctx)
+	if span == nil {
+		return NewZeroedTraceID()
 	}
 
 	out = span.SpanContext().TraceID()
