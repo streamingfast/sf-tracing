@@ -49,26 +49,24 @@ func init() {
 
 // GetTraceID try to find from the context the correct TraceID associated
 // with it. When none is found, returns an randomly generated one.
-func GetTraceID(ctx context.Context) (out ttrace.TraceID) {
-	span := ttrace.SpanFromContext(ctx)
-	if span == nil {
-		return NewRandomTraceID()
+func GetTraceID(ctx context.Context) ttrace.TraceID {
+	if span := ttrace.SpanFromContext(ctx); span != nil {
+		if traceID := span.SpanContext().TraceID(); traceID.IsValid() {
+			return traceID
+		}
 	}
-
-	out = span.SpanContext().TraceID()
-	return
+	return NewRandomTraceID()
 }
 
 // GetTraceIDOrZeroed is just like `GetTraceID` but returns a zeroed
 // trace ID if no trace ID is found in the context.
 func GetTraceIDOrZeroed(ctx context.Context) (out ttrace.TraceID) {
-	span := ttrace.SpanFromContext(ctx)
-	if span == nil {
-		return NewZeroedTraceID()
+	if span := ttrace.SpanFromContext(ctx); span != nil {
+		if traceID := span.SpanContext().TraceID(); traceID.IsValid() {
+			return traceID
+		}
 	}
-
-	out = span.SpanContext().TraceID()
-	return
+	return NewZeroedTraceID()
 }
 
 // NewRandomTraceID returns a random trace ID using OpenCensus default config IDGenerator.
