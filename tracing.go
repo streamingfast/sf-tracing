@@ -47,31 +47,30 @@ func init() {
 	hostname, _ = os.Hostname()
 }
 
-// GetTraceID try to find from the context the correct TraceID associated
-// with it. When none is found, returns an randomly generated one.
+// GetTraceID gets the TraceID from the context, you should check if it IsValid()
 func GetTraceID(ctx context.Context) ttrace.TraceID {
 	if span := ttrace.SpanFromContext(ctx); span != nil {
-		if traceID := span.SpanContext().TraceID(); traceID.IsValid() {
-			return traceID
-		}
+		return span.SpanContext().TraceID()
 	}
-	return NewRandomTraceID()
+	return ttrace.TraceID{} // invalid TraceID
 }
 
-// GetTraceIDOrZeroed is just like `GetTraceID` but returns a zeroed
-// trace ID if no trace ID is found in the context.
-func GetTraceIDOrZeroed(ctx context.Context) (out ttrace.TraceID) {
-	if span := ttrace.SpanFromContext(ctx); span != nil {
-		if traceID := span.SpanContext().TraceID(); traceID.IsValid() {
-			return traceID
-		}
-	}
-	return NewZeroedTraceID()
+// WithTraceID adds an otel span with the given traceID
+func WithTraceID(ctx context.Context, traceID ttrace.TraceID) context.Context {
+	return ttrace.ContextWithSpanContext(ctx, ttrace.NewSpanContext(ttrace.SpanContextConfig{
+		TraceID: traceID,
+		SpanID:  NewRandomSpanID(),
+	}))
 }
 
 // NewRandomTraceID returns a random trace ID using OpenCensus default config IDGenerator.
 func NewRandomTraceID() ttrace.TraceID {
 	return config.Load().(*defaultIDGenerator).NewTraceID()
+}
+
+// NewRandomSpanID returns a random span ID using OpenCensus default config IDGenerator.
+func NewRandomSpanID() ttrace.SpanID {
+	return config.Load().(*defaultIDGenerator).NewSpanID()
 }
 
 // NewZeroedTraceID returns a mocked, fixed trace ID containing only 0s.
