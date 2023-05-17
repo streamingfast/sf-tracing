@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"net/url"
 	"os"
 	"strconv"
@@ -311,11 +310,9 @@ func registerZipkin(serviceName string, u *url.URL) error {
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 
-	logger := log.New(os.Stderr, "zipkin-example", log.Ldate|log.Ltime|log.Llongfile)
 	// Set up a trace exporter
 	traceExporter, err := zipkin.New(
 		fmt.Sprintf("%s://%s/api/v2/spans", u.Query().Get("scheme"), u.Host),
-		zipkin.WithLogger(logger),
 	)
 
 	// Register the trace exporter with a TracerProvider, using a batch
