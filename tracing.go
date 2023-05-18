@@ -16,7 +16,6 @@ package tracing
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"net/url"
 	"os"
@@ -35,7 +34,6 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	"go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.10.0"
-	ttrace "go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -46,87 +44,6 @@ func init() {
 	hostname, _ = os.Hostname()
 }
 
-// GetTraceID gets the TraceID from the context, you should check if it IsValid()
-func GetTraceID(ctx context.Context) ttrace.TraceID {
-	if span := ttrace.SpanFromContext(ctx); span != nil {
-		return span.SpanContext().TraceID()
-	}
-	return ttrace.TraceID{} // invalid TraceID
-}
-
-// WithTraceID adds an otel span with the given traceID
-func WithTraceID(ctx context.Context, traceID ttrace.TraceID) context.Context {
-	return ttrace.ContextWithSpanContext(ctx, ttrace.NewSpanContext(ttrace.SpanContextConfig{
-		TraceID: traceID,
-		SpanID:  NewRandomSpanID(),
-	}))
-}
-
-// NewRandomTraceID returns a random trace ID using OpenCensus default config IDGenerator.
-func NewRandomTraceID() ttrace.TraceID {
-	return config.Load().(*defaultIDGenerator).NewTraceID()
-}
-
-// NewRandomSpanID returns a random span ID using OpenCensus default config IDGenerator.
-func NewRandomSpanID() ttrace.SpanID {
-	return config.Load().(*defaultIDGenerator).NewSpanID()
-}
-
-// NewZeroedTraceID returns a mocked, fixed trace ID containing only 0s.
-func NewZeroedTraceID() ttrace.TraceID {
-	return NewFixedTraceID("00000000000000000000000000000000")
-}
-
-// NewFixedTraceID returns a mocked, fixed trace ID from an hexadecimal string.
-// The string in question must be a valid hexadecimal string containing exactly
-// 32 characters (16 bytes). Any invalid input results in a panic.
-func NewFixedTraceID(hexTraceID string) (out ttrace.TraceID) {
-	if len(hexTraceID) != 32 {
-		panic(fmt.Errorf("trace id hexadecimal value should have 32 characters, received %d for %q", len(hexTraceID), hexTraceID))
-	}
-
-	bytes, err := hex.DecodeString(hexTraceID)
-	if err != nil {
-		panic(fmt.Errorf("unable to decode hex trace id %q: %s", hexTraceID, err))
-	}
-
-	for i := 0; i < 16; i++ {
-		out[i] = bytes[i]
-	}
-
-	return
-}
-
-// NewZeroedTraceIDInContext is similar to NewZeroedTraceID but will actually
-// insert the span straight into a context that can later be used
-// to ensure the trace id is controlled.
-//
-// This should be use only in testing to provide a fixed trace ID
-// instead of generating a new one each time.
-func NewZeroedTraceIDInContext(ctx context.Context) context.Context {
-	ctx = ttrace.ContextWithRemoteSpanContext(ctx, ttrace.NewSpanContext(ttrace.SpanContextConfig{
-		TraceID: NewZeroedTraceID(),
-		SpanID:  config.Load().(*defaultIDGenerator).NewSpanID(),
-	}))
-
-	return ctx
-}
-
-// NewFixedTraceIDInContext is similar to NewFixedTraceID but will actually
-// insert the span straight into a context that can later be used
-// to ensure the trace id is controlled.
-//
-// This should be use only in testing to provide a fixed trace ID
-// instead of generating a new one each time.
-func NewFixedTraceIDInContext(ctx context.Context, hexTraceID string) context.Context {
-	ctx = ttrace.ContextWithRemoteSpanContext(ctx, ttrace.NewSpanContext(ttrace.SpanContextConfig{
-		TraceID: NewFixedTraceID(hexTraceID),
-		SpanID:  config.Load().(*defaultIDGenerator).NewSpanID(),
-	}))
-
-	return ctx
-}
-
 // SetupOpenTelemetry sets up tracers based on the `DTRACING` environment variable.
 //
 // Options are:
@@ -135,11 +52,7 @@ func NewFixedTraceIDInContext(ctx context.Context, hexTraceID string) context.Co
 //   - jaeger://[host:port]?scheme=<http|https>
 //   - zipkin://[host:port]?scheme=<http|https>
 //   - otelcol://[host:port]
-//
-// For cloudtrace, the default sampling rate is 0.25, you can specify it with:
-//
-//	cloudtrace://?sample=0.50 (UNIMPLEMENTED!)
-func SetupOpenTelemetry(serviceName string) error {
+func SetupOpenTelemetry(ctx context.Context, serviceName string) error {
 	conf := os.Getenv("SF_TRACING")
 	if conf == "" {
 		return nil
@@ -151,21 +64,21 @@ func SetupOpenTelemetry(serviceName string) error {
 
 	switch u.Scheme {
 	case "stdout":
-		return registerStdout(serviceName, u)
+		return registerStdout(ctx, serviceName, u)
 	case "cloudtrace":
-		return registerCloudTrace(serviceName, u)
+		return registerCloudTrace(ctx, serviceName, u)
 	case "otelcol":
-		return registerOtelcol(serviceName, u)
+		return registerOtelcol(ctx, serviceName, u)
 	case "zipkin":
-		return registerZipkin(serviceName, u)
+		return registerZipkin(ctx, serviceName, u)
 	case "jaeger":
-		return registerJaeger(serviceName, u)
+		return registerJaeger(ctx, serviceName, u)
 	default:
 		return fmt.Errorf("unsupported tracing scheme %q", u.Scheme)
 	}
 }
 
-func registerStdout(serviceName string, u *url.URL) error {
+func registerStdout(ctx context.Context, serviceName string, u *url.URL) error {
 	exp, err := stdouttrace.New(
 		stdouttrace.WithWriter(os.Stderr),
 		// Use human-readable output.
@@ -183,7 +96,6 @@ func registerStdout(serviceName string, u *url.URL) error {
 		resource.NewWithAttributes(
 			semconv.SchemaURL,
 			semconv.ServiceNameKey.String(serviceName),
-			//semconv.ServiceVersionKey.String("v0.1.0"),
 			attribute.String("environment", os.Getenv("NAMESPACE") /* that won't work, whatever */),
 		),
 	)
@@ -201,8 +113,7 @@ func registerStdout(serviceName string, u *url.URL) error {
 	return nil
 }
 
-func registerCloudTrace(serviceName string, u *url.URL) error {
-	ctx := context.Background()
+func registerCloudTrace(ctx context.Context, serviceName string, u *url.URL) error {
 	projectID := u.Query().Get("project_id")
 	exp, err := texporter.New(texporter.WithProjectID(projectID))
 	if err != nil {
@@ -225,10 +136,14 @@ func registerCloudTrace(serviceName string, u *url.URL) error {
 		return fmt.Errorf("creating resource: %w", err)
 	}
 
-	ratio, err := strconv.ParseFloat(u.Query().Get("ratio"), 64)
-	if err != nil {
-		return fmt.Errorf("parsing ratio: %w", err)
+	ratio := 0.25
+	if u.Query().Get("ratio") != "" {
+		ratio, err = strconv.ParseFloat(u.Query().Get("ratio"), 64)
+		if err != nil {
+			return fmt.Errorf("parsing ratio: %w", err)
+		}
 	}
+
 	sampler := trace.TraceIDRatioBased(ratio)
 
 	tp := trace.NewTracerProvider(
@@ -241,9 +156,7 @@ func registerCloudTrace(serviceName string, u *url.URL) error {
 	return nil
 }
 
-func registerOtelcol(serviceName string, u *url.URL) error {
-	ctx := context.Background()
-
+func registerOtelcol(ctx context.Context, serviceName string, u *url.URL) error {
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
 			// the service name used to display traces in backends
@@ -289,9 +202,7 @@ func registerOtelcol(serviceName string, u *url.URL) error {
 	return nil
 }
 
-func registerZipkin(serviceName string, u *url.URL) error {
-	ctx := context.Background()
-
+func registerZipkin(ctx context.Context, serviceName string, u *url.URL) error {
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
 			// the service name used to display traces in backends
@@ -332,9 +243,7 @@ func registerZipkin(serviceName string, u *url.URL) error {
 	return nil
 }
 
-func registerJaeger(serviceName string, u *url.URL) error {
-	ctx := context.Background()
-
+func registerJaeger(ctx context.Context, serviceName string, u *url.URL) error {
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
 			// the service name used to display traces in backends
