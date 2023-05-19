@@ -44,7 +44,7 @@ func init() {
 	hostname, _ = os.Hostname()
 }
 
-// SetupOpenTelemetry sets up tracers based on the `DTRACING` environment variable.
+// SetupOpenTelemetry sets up tracers based on the `SF_TRACING` environment variable.
 //
 // Options are:
 //   - stdout://
