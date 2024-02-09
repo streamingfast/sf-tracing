@@ -9,7 +9,6 @@ export SF_TRACING=<Collector-URL>
 ### Collector-URL
 - stdout://
 - cloudtrace://[host:port]?project_id=<project_id>&ratio=<0.25>
-- jaeger://[host:port]?scheme=<http|https>
 - zipkin://[host:port]?scheme=<http|https>
 - otelcol://[host:port]
 

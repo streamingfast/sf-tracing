@@ -26,7 +26,6 @@ import (
 	"go.opentelemetry.io/contrib/detectors/gcp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/jaeger"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/exporters/zipkin"
@@ -49,7 +48,6 @@ func init() {
 // Options are:
 //   - stdout://
 //   - cloudtrace://[host:port]?project_id=<project_id>&ratio=<0.25>
-//   - jaeger://[host:port]?scheme=<http|https>
 //   - zipkin://[host:port]?scheme=<http|https>
 //   - otelcol://[host:port]
 func SetupOpenTelemetry(ctx context.Context, serviceName string) error {
@@ -71,8 +69,6 @@ func SetupOpenTelemetry(ctx context.Context, serviceName string) error {
 		return registerOtelcol(ctx, serviceName, u)
 	case "zipkin":
 		return registerZipkin(ctx, serviceName, u)
-	case "jaeger":
-		return registerJaeger(ctx, serviceName, u)
 	default:
 		return fmt.Errorf("unsupported tracing scheme %q", u.Scheme)
 	}
@@ -225,43 +221,6 @@ func registerZipkin(ctx context.Context, serviceName string, u *url.URL) error {
 	traceExporter, err := zipkin.New(
 		fmt.Sprintf("%s://%s/api/v2/spans", u.Query().Get("scheme"), u.Host),
 	)
-
-	// Register the trace exporter with a TracerProvider, using a batch
-	// span processor to aggregate spans before export.
-	bsp := trace.NewBatchSpanProcessor(traceExporter)
-	tracerProvider := trace.NewTracerProvider(
-		trace.WithSampler(trace.AlwaysSample()),
-		trace.WithResource(res),
-		trace.WithSpanProcessor(bsp),
-	)
-	otel.SetTracerProvider(tracerProvider)
-
-	// set global propagator to tracecontext (the default is no-op).
-	otel.SetTextMapPropagator(propagation.TraceContext{})
-
-	// Shutdown will flush any remaining spans and shut down the exporter.
-	return nil
-}
-
-func registerJaeger(ctx context.Context, serviceName string, u *url.URL) error {
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			// the service name used to display traces in backends
-			semconv.ServiceNameKey.String(serviceName),
-		),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to create resource: %w", err)
-	}
-
-	traceExporter, err := jaeger.New(
-		jaeger.WithCollectorEndpoint(
-			jaeger.WithEndpoint(fmt.Sprintf("%s://%s/api/traces", u.Query().Get("scheme"), u.Host)),
-		),
-	)
-	if err != nil {
-		return err
-	}
 
 	// Register the trace exporter with a TracerProvider, using a batch
 	// span processor to aggregate spans before export.
