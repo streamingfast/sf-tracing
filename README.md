@@ -10,7 +10,6 @@ export SF_TRACING=<Collector-URL>
 - stdout://
 - cloudtrace://[host:port]?project_id=<project_id>&ratio=<0.25>
 - zipkin://[host:port]?scheme=<http|https>
-- otelcol://[host:port]
 
 ```go
 package main
