@@ -4,19 +4,15 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	ttrace "go.opentelemetry.io/otel/trace"
 	"runtime/debug"
+
+	"go.opentelemetry.io/otel"
+	ttrace "go.opentelemetry.io/otel/trace"
 )
 
 // Returns a tracer
 func GetTracer() ttrace.Tracer {
-	opts := []ttrace.TracerOption{
-		ttrace.WithInstrumentationAttributes(
-			attribute.String("foo", "bar"),
-		),
-	}
+	opts := []ttrace.TracerOption{}
 	if info, ok := debug.ReadBuildInfo(); ok {
 		for _, setting := range info.Settings {
 			if setting.Key == "vcs.revision" {
