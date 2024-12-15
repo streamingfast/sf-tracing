@@ -10,6 +10,7 @@ export SF_TRACING=<Collector-URL>
 - stdout://
 - cloudtrace://[host:port]?project_id=<project_id>&ratio=<0.25>
 - zipkin://[host:port]?scheme=<http|https>
+- (http|https)://[host]/[path]?header1=value1&header2=value2
 
 ```go
 package main
@@ -22,11 +23,12 @@ import (
 
 func main() {
 	ctx := context.Background()
-	
-	err := tracing.SetupOpenTelemetry("my-service-name")
+
+	provider, err := tracing.SetupOpenTelemetry("my-service-name")
 	if err != nil {
         panic(err)
     }
+	defer provider.Shutdown(ctx)
 
 	myTracer := otel.Tracer("pipeline")
 
@@ -35,7 +37,7 @@ func main() {
 
 	span.SetAttributes(attribute.Int64("block_num", 1))
 	span.AddEvent("something_append")
-	
+
 	span.SetStatus(otelcode.Ok, "")
 }
 ```

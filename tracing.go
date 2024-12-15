@@ -26,6 +26,7 @@ import (
 	"go.opentelemetry.io/contrib/detectors/gcp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	otlptracehttp "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/exporters/zipkin"
 	"go.opentelemetry.io/otel/propagation"
@@ -40,20 +41,21 @@ func init() {
 	hostname, _ = os.Hostname()
 }
 
-// SetupOpenTelemetry sets up tracers based on the `SF_TRACING` environment variable.
+// SetupOpenTelemetry sets up tracers based on the `SF_TRACING` environment variable. and return tracer
 //
 // Options are:
 //   - stdout://
 //   - cloudtrace://[host:port]?project_id=<project_id>&ratio=<0.25>
 //   - zipkin://[host:port]?scheme=<http|https>
-func SetupOpenTelemetry(ctx context.Context, serviceName string) error {
+//   - (http|https)://[host]/[path]?header1=value1&header2=value2
+func SetupOpenTelemetry(ctx context.Context, serviceName string) (*trace.TracerProvider, error) {
 	conf := os.Getenv("SF_TRACING")
 	if conf == "" {
-		return nil
+		return nil, nil
 	}
 	u, err := url.Parse(conf)
 	if err != nil {
-		return fmt.Errorf("parsing env var DTRACING with value %q: %w", conf, err)
+		return nil, fmt.Errorf("parsing env var SF_TRACING with value %q: %w", conf, err)
 	}
 
 	switch u.Scheme {
@@ -63,12 +65,14 @@ func SetupOpenTelemetry(ctx context.Context, serviceName string) error {
 		return registerCloudTrace(ctx, serviceName, u)
 	case "zipkin":
 		return registerZipkin(ctx, serviceName, u)
+	case "https", "http":
+		return registerHTTP(ctx, serviceName, u)
 	default:
-		return fmt.Errorf("unsupported tracing scheme %q", u.Scheme)
+		return nil, fmt.Errorf("unsupported tracing scheme %q", u.Scheme)
 	}
 }
 
-func registerStdout(ctx context.Context, serviceName string, u *url.URL) error {
+func registerStdout(ctx context.Context, serviceName string, u *url.URL) (*trace.TracerProvider, error) {
 	exp, err := stdouttrace.New(
 		stdouttrace.WithWriter(os.Stderr),
 		// Use human-readable output.
@@ -76,9 +80,8 @@ func registerStdout(ctx context.Context, serviceName string, u *url.URL) error {
 		// Do not print timestamps for the demo.
 		stdouttrace.WithoutTimestamps(),
 	)
-
 	if err != nil {
-		return fmt.Errorf("creating stdout exporter: %w", err)
+		return nil, fmt.Errorf("creating stdout exporter: %w", err)
 	}
 
 	res, err := resource.Merge(
@@ -91,7 +94,7 @@ func registerStdout(ctx context.Context, serviceName string, u *url.URL) error {
 	)
 
 	if err != nil {
-		return fmt.Errorf("creating stdout resource: %w", err)
+		return nil, fmt.Errorf("creating stdout resource: %w", err)
 	}
 
 	tp := trace.NewTracerProvider(
@@ -100,14 +103,14 @@ func registerStdout(ctx context.Context, serviceName string, u *url.URL) error {
 	)
 	otel.SetTracerProvider(tp)
 
-	return nil
+	return tp, nil
 }
 
-func registerCloudTrace(ctx context.Context, serviceName string, u *url.URL) error {
+func registerCloudTrace(ctx context.Context, serviceName string, u *url.URL) (*trace.TracerProvider, error) {
 	projectID := u.Query().Get("project_id")
 	exp, err := texporter.New(texporter.WithProjectID(projectID))
 	if err != nil {
-		return fmt.Errorf("creating cloudtrace exporter: %w", err)
+		return nil, fmt.Errorf("creating cloudtrace exporter: %w", err)
 	}
 
 	// Identify your application using resource detection
@@ -123,14 +126,14 @@ func registerCloudTrace(ctx context.Context, serviceName string, u *url.URL) err
 	)
 
 	if err != nil {
-		return fmt.Errorf("creating resource: %w", err)
+		return nil, fmt.Errorf("creating resource: %w", err)
 	}
 
 	ratio := 0.25
 	if u.Query().Get("ratio") != "" {
 		ratio, err = strconv.ParseFloat(u.Query().Get("ratio"), 64)
 		if err != nil {
-			return fmt.Errorf("parsing ratio: %w", err)
+			return nil, fmt.Errorf("parsing ratio: %w", err)
 		}
 	}
 
@@ -143,10 +146,10 @@ func registerCloudTrace(ctx context.Context, serviceName string, u *url.URL) err
 	)
 	otel.SetTracerProvider(tp)
 
-	return nil
+	return tp, nil
 }
 
-func registerZipkin(ctx context.Context, serviceName string, u *url.URL) error {
+func registerZipkin(ctx context.Context, serviceName string, u *url.URL) (*trace.TracerProvider, error) {
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
 			// the service name used to display traces in backends
@@ -154,7 +157,47 @@ func registerZipkin(ctx context.Context, serviceName string, u *url.URL) error {
 		),
 	)
 	if err != nil {
-		return fmt.Errorf("failed to create resource: %w", err)
+		return nil, fmt.Errorf("failed to create resource: %w", err)
+	}
+
+	// If the OpenTelemetry Collector is running on a local cluster (minikube or
+	// microk8s), it should be accessible through the NodePort service at the
+	// `localhost:30080` endpoint. Otherwise, replace `localhost` with the
+	// endpoint of your cluster. If you run the app inside k8s, then you can
+	// probably connect directly to the service through dns
+	traceExporter, err := zipkin.New(
+		fmt.Sprintf("%s://%s/api/v2/spans", u.Query().Get("scheme"), u.Host),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create zipkin client: %w", err)
+	}
+
+	// Register the trace exporter with a TracerProvider, using a batch
+	// span processor to aggregate spans before export.
+	bsp := trace.NewBatchSpanProcessor(traceExporter)
+	tp := trace.NewTracerProvider(
+		trace.WithSampler(trace.AlwaysSample()),
+		trace.WithResource(res),
+		trace.WithSpanProcessor(bsp),
+	)
+	otel.SetTracerProvider(tp)
+
+	// set global propagator to trace context (the default is no-op).
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+
+	// Shutdown will flush any remaining spans and shut down the exporter.
+	return tp, nil
+}
+
+func registerHTTP(ctx context.Context, serviceName string, u *url.URL) (*trace.TracerProvider, error) {
+	res, err := resource.New(ctx,
+		resource.WithAttributes(
+			// the service name used to display traces in backends
+			semconv.ServiceNameKey.String(serviceName),
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create resource: %w", err)
 	}
 
 	// If the OpenTelemetry Collector is running on a local cluster (minikube or
@@ -165,10 +208,16 @@ func registerZipkin(ctx context.Context, serviceName string, u *url.URL) error {
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 
-	// Set up a trace exporter
-	traceExporter, err := zipkin.New(
-		fmt.Sprintf("%s://%s/api/v2/spans", u.Query().Get("scheme"), u.Host),
+	urlPaths := getURLParts(u)
+
+	traceExporter, err := otlptracehttp.New(ctx,
+		otlptracehttp.WithEndpoint(urlPaths.endpoint),
+		otlptracehttp.WithURLPath(urlPaths.urlPath),
+		otlptracehttp.WithHeaders(urlPaths.headers),
 	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create trace exporter: %w", err)
+	}
 
 	// Register the trace exporter with a TracerProvider, using a batch
 	// span processor to aggregate spans before export.
@@ -184,5 +233,5 @@ func registerZipkin(ctx context.Context, serviceName string, u *url.URL) error {
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 
 	// Shutdown will flush any remaining spans and shut down the exporter.
-	return nil
+	return tracerProvider, nil
 }
